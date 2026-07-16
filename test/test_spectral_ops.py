@@ -1679,6 +1679,7 @@ for doc_test in FFTDocTestFinder().find(torch.fft, globs=dict(torch=torch)):
 
 instantiate_device_type_tests(TestFFT, globals())
 instantiate_device_type_tests(TestFFTDocExamples, globals(), only_for='cpu')
+instantiate_device_type_tests(TestCUFFT, globals(), only_for='cuda')
 
 if __name__ == '__main__':
     run_tests()
