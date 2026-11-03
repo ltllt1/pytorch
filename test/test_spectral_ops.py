@@ -15,7 +15,7 @@ from torch.testing._internal.common_utils import \
      make_tensor, skipIfTorchDynamo, HardwareClassification)
 from torch.testing._internal.common_device_type import \
     (instantiate_device_type_tests, ops, dtypes, onlyNativeDeviceTypes,
-     skipCPUIfNoFFT, deviceCountAtLeast, onlyCUDA, onlyOn, OpDTypes, toleranceOverride, tol,
+     skipCPUIfNoFFT, deviceCountAtLeast, onlyOn, OpDTypes, toleranceOverride, tol,
      largeTensorTest)
 from torch.testing._internal.common_methods_invocations import (
     spectral_funcs, SpectralFuncType)
@@ -126,6 +126,7 @@ def skip_helper_for_fft(device, dtype):
 
 # Tests of functions related to Fourier analysis in the torch.fft namespace
 class TestFFT(TestCase):
+    hw_classification = HardwareClassification.ACCELERATOR
     exact_dtype = True
 
     @onlyNativeDeviceTypes
@@ -840,20 +841,6 @@ class TestFFT(TestCase):
     def test_fft_ifft_rfft_irfft(self, device, dtype):
         self._test_fft_ifft_rfft_irfft(device, dtype)
 
-    @onlyCUDA
-    @largeTensorTest("18GB")
-    def test_fft_conjugate_symmetry_fill_int64_indexing(self, device):
-        # The CUDA conjugate-symmetry fill uses 32-bit index math when numel and
-        # every element offset fit in int32, else a 64-bit fallback. Space the
-        # output rows 2**31 elements apart so max_out_offset exceeds INT32_MAX and
-        # the 64-bit path is taken, while the filled region itself stays tiny.
-        rows, cols, stride = 2, 8, 2 ** 31
-        x = torch.randn(rows, cols, device=device)
-        buf = torch.empty((rows - 1) * stride + cols, dtype=torch.complex64, device=device)
-        out = buf.as_strided((rows, cols), (stride, 1))
-        torch.fft.fft(x, dim=-1, out=out)
-        self.assertEqual(out, torch.fft.fft(x, dim=-1))
-
     # passes on ROCm w/ python 2.7, fails w/ python 3.6
     @skipIfTorchDynamo("cannot set WRITEABLE flag to True of this array")
     @skipCPUIfNoFFT
@@ -1515,6 +1502,20 @@ class TestFFT(TestCase):
         self.assertEqual(i_original.repeat(1, 1), i_single, atol=1e-6, rtol=0, exact_dtype=True)
         self.assertEqual(i_original.repeat(4, 1), i_multi, atol=1e-6, rtol=0, exact_dtype=True)
 
+    @ops(spectral_funcs, allowed_dtypes=(torch.half, torch.chalf))
+    def test_fft_half_and_chalf_not_power_of_two_error(self, device, dtype, op):
+        t = make_tensor(13, 13, device=device, dtype=dtype)
+        err_msg = "FFT only supports dimensions whose sizes are powers of two"
+        with self.assertRaisesRegex(RuntimeError, err_msg):
+            op(t)
+
+        if op.ndimensional in (SpectralFuncType.ND, SpectralFuncType.TwoD):
+            kwargs = {'s': (12, 12)}
+        else:
+            kwargs = {'n': 12}
+
+        with self.assertRaisesRegex(RuntimeError, err_msg):
+            op(t, **kwargs)
 
 
 class FFTDocTestFinder:
@@ -1672,20 +1673,18 @@ class TestCUFFT(TestCase):
         with self.assertRaisesRegex(RuntimeError, "istft input and window must be on the same device"):
             torch.istft(x.to(device), n_fft=100, window=window)
 
-    @ops(spectral_funcs, allowed_dtypes=(torch.half, torch.chalf))
-    def test_fft_half_and_chalf_not_power_of_two_error(self, device, dtype, op):
-        t = make_tensor(13, 13, device=device, dtype=dtype)
-        err_msg = "cuFFT only supports dimensions whose sizes are powers of two"
-        with self.assertRaisesRegex(RuntimeError, err_msg):
-            op(t)
-
-        if op.ndimensional in (SpectralFuncType.ND, SpectralFuncType.TwoD):
-            kwargs = {'s': (12, 12)}
-        else:
-            kwargs = {'n': 12}
-
-        with self.assertRaisesRegex(RuntimeError, err_msg):
-            op(t, **kwargs)
+    @largeTensorTest("18GB")
+    def test_fft_conjugate_symmetry_fill_int64_indexing(self, device):
+        # The CUDA conjugate-symmetry fill uses 32-bit index math when numel and
+        # every element offset fit in int32, else a 64-bit fallback. Space the
+        # output rows 2**31 elements apart so max_out_offset exceeds INT32_MAX and
+        # the 64-bit path is taken, while the filled region itself stays tiny.
+        rows, cols, stride = 2, 8, 2 ** 31
+        x = torch.randn(rows, cols, device=device)
+        buf = torch.empty((rows - 1) * stride + cols, dtype=torch.complex64, device=device)
+        out = buf.as_strided((rows, cols), (stride, 1))
+        torch.fft.fft(x, dim=-1, out=out)
+        self.assertEqual(out, torch.fft.fft(x, dim=-1))
 
 for doc_test in FFTDocTestFinder().find(torch.fft, globs=dict(torch=torch)):
     generate_doc_test(doc_test)
